@@ -153,7 +153,7 @@ app.post('/api/validate-license', async (req, res) => {
 // 3. WEBHOOK HANDLER (Called by Lemon Squeezy on cancellation)
 // -----------------------------------------------------
 
-app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     // IMPORTANT: Webhooks must be verified to prevent malicious users from faking a cancellation!
     const secret = process.env.LS_WEBHOOK_SECRET;
     const hmac = crypto.createHmac('sha256', secret);
@@ -172,22 +172,35 @@ app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), (req, res
         return res.status(400).send("ERROR: Invalid signature");
     }
     
-    // Parse the verified raw body
-    const event = JSON.parse(req.body.toString());
-    const eventName = event.meta.event_name;
-    const licenseId = event.data.attributes.license_id;
+    try {
+        const event = JSON.parse(req.body.toString());
+        const eventName = event.meta.event_name;
+        
+        // The license key is inside the 'attributes' of the 'data' object for most events
+        const licenseKey = event.data.attributes.license_key; 
 
-    console.log(`Verified Webhook Event Received: ${eventName} for License ID: ${licenseId}`);
+        console.log(`Verified Webhook Event: ${eventName} for Key: ${licenseKey}`);
 
-    // --- YOUR REVOCATION LOGIC GOES HERE ---
-    if (eventName === 'subscription_cancelled' || eventName === 'subscription_expired') {
-        // **This is where you would call your database (e.g., Firebase, Render Postgres) 
-        // to set the status of licenseId to 'revoked'**
-        console.log(`ACTION: Revoking premium status for License ID ${licenseId}`);
+        // --- REFUND REVOCATION LOGIC ---
+        if (eventName === 'order_refunded' || eventName === 'license_disabled') {
+            
+            // Update the status of ALL instances using this key to 'refunded'
+            const updateResult = await pool.query(
+                'UPDATE license_activations SET status = $1 WHERE license_key = $2',
+                ['refunded', licenseKey]
+            );
+
+            console.log(`ACTION: Revoked ${updateResult.rowCount} license activation(s) due to refund.`);
+        }
+        
+        // Always return 200 OK quickly to acknowledge receipt
+        res.sendStatus(200); 
+
+    } catch (dbError) {
+        console.error("WEBHOOK DB ERROR:", dbError);
+        // Even on internal DB error, we must return 200 OK to Lemon Squeezy to prevent retries
+        res.sendStatus(200); 
     }
-
-    // Must return 200 OK quickly to acknowledge receipt and prevent retries
-    res.sendStatus(200); 
 });
 
 
