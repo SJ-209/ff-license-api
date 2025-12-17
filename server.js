@@ -76,20 +76,39 @@ pool.connect()
 // -----------------------------------------------------
 
 app.post('/api/validate-license', async (req, res) => {
-    const { license_key } = req.body;
+    const { license_key, instance_id } = req.body; // Expecting instance_id from extension
     
     // IMPORTANT SECRETS (from Render Environment Variables)
     const LEMON_SQUEEZY_API_KEY = process.env.LEMON_SQUEEZY_API_KEY;
     const PRODUCT_ID = process.env.PRODUCT_ID; 
 
-    if (!license_key) {
-        return res.status(400).json({ status: 'error', message: 'License key is required.' });
+    if (!license_key || !instance_id) {
+        return res.status(400).json({ status: 'error', message: 'Key and Instance ID are required.' });
     }
 
     try {
-        // Securely call the Lemon Squeezy License API (Server-to-Server)
-        const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/validate', {
-            license_key: license_key
+        // A. 1st Check: Look up status in your local Postgres DB (Fast!)
+        const dbResult = await pool.query(
+            'SELECT status FROM license_activations WHERE license_key = $1 AND extension_instance_id = $2',
+            [license_key, instance_id]
+        );
+
+        if (dbResult.rows.length > 0) {
+            const status = dbResult.rows[0].status;
+            if (status === 'active') {
+                return res.status(200).json({ status: 'active', valid: true, message: 'Active from local cache.' });
+            } else {
+                // Key found but marked refunded/disabled in our DB
+                return res.status(403).json({ status: status, valid: false, message: `License ${status}.` });
+            }
+        }
+
+        // B. 2nd Check: If not found in DB, try to ACTIVATE/VALIDATE with Lemon Squeezy
+        console.log("License not found locally. Attempting activation via Lemon Squeezy...");
+
+        const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', {
+            license_key: license_key,
+            instance_name: instance_id // Use the extension's unique ID for tracking
         }, {
             headers: {
                 'Authorization': `Bearer ${LEMON_SQUEEZY_API_KEY}`, 
@@ -97,29 +116,35 @@ app.post('/api/validate-license', async (req, res) => {
             }
         });
 
-        const data = ls_response.data.data.attributes; 
+        const data = ls_response.data.data.attributes;
         
-        // 🚨 Critical Security Check: Ensure the key is for YOUR product
         if (String(data.product_id) !== String(PRODUCT_ID)) {
              return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
         }
 
-        // Check if the license is valid (active or grace period)
         if (data.valid) {
-            // In a real app, you would also check activation limits and log the extension instance ID here.
+            // Activation was successful or key was already active on this instance.
+            
+            // C. 3rd Step: Insert the new active license into your DB
+            await pool.query(
+                'INSERT INTO license_activations (license_key, extension_instance_id, status) VALUES ($1, $2, $3) ON CONFLICT (extension_instance_id) DO NOTHING',
+                [license_key, instance_id, 'active']
+            );
+
             res.status(200).json({ 
                 status: 'active', 
                 valid: true, 
-                expires: data.expires_at 
+                message: 'Activation successful.'
             });
         } else {
-            res.status(403).json({ status: 'inactive', valid: false, message: 'License expired or disabled.' });
+            res.status(403).json({ status: 'inactive', valid: false, message: 'License invalid or activation limit reached.' });
         }
 
     } catch (error) {
-        // Handle network errors or LS API returning a non-200 status
-        console.error('Validation Error:', error.response?.data || error.message);
-        res.status(500).json({ status: 'error', message: 'Could not validate license.' });
+        // LS API error, including activation limit reached (which returns 4xx status)
+        const errorMessage = error.response?.data?.error || error.message;
+        console.error('Validation Error:', errorMessage);
+        res.status(500).json({ status: 'error', message: `Server error or activation failed: ${errorMessage}` });
     }
 });
 
