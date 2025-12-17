@@ -75,12 +75,15 @@ pool.connect()
 // 2. LICENSE VALIDATION ENDPOINT (Called by Chrome Extension)
 // -----------------------------------------------------
 
+// server.js - REPLACE THE EXISTING LOGIC INSIDE:
+// app.post('/api/validate-license', async (req, res) => { ... });
+
 app.post('/api/validate-license', async (req, res) => {
-    const { license_key, instance_id } = req.body; // Expecting instance_id from extension
+    const { license_key, instance_id } = req.body;
     
     // IMPORTANT SECRETS (from Render Environment Variables)
     const LEMON_SQUEEZY_API_KEY = process.env.LEMON_SQUEEZY_API_KEY;
-    const PRODUCT_ID = process.env.PRODUCT_ID; 
+    const YOUR_PRODUCT_ID = process.env.YOUR_PRODUCT_ID; 
 
     if (!license_key || !instance_id) {
         return res.status(400).json({ status: 'error', message: 'Key and Instance ID are required.' });
@@ -102,28 +105,30 @@ app.post('/api/validate-license', async (req, res) => {
                 return res.status(403).json({ status: status, valid: false, message: `License ${status}.` });
             }
         }
-
+        
         // B. 2nd Check: If not found in DB, try to ACTIVATE/VALIDATE with Lemon Squeezy
         console.log("License not found locally. Attempting activation via Lemon Squeezy...");
-
+        
         const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', {
             license_key: license_key,
-            instance_name: instance_id // Use the extension's unique ID for tracking
+            instance_name: instance_id 
         }, {
             headers: {
                 'Authorization': `Bearer ${LEMON_SQUEEZY_API_KEY}`, 
                 'Accept': 'application/json',
             }
         });
-
-        const data = ls_response.data.data.attributes;
         
-        if (String(data.product_id) !== String(PRODUCT_ID)) {
+        // --- START OF MODIFIED SUCCESS HANDLING ---
+        // If we reach here, axios returned a 200 OK status.
+        const data = ls_response.data.data.attributes; // Access the attributes object safely
+
+        if (String(data.product_id) !== String(YOUR_PRODUCT_ID)) {
              return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
         }
 
         if (data.valid) {
-            // Activation was successful or key was already active on this instance.
+            // Activation was successful.
             
             // C. 3rd Step: Insert the new active license into your DB
             await pool.query(
@@ -137,14 +142,34 @@ app.post('/api/validate-license', async (req, res) => {
                 message: 'Activation successful.'
             });
         } else {
-            res.status(403).json({ status: 'inactive', valid: false, message: 'License invalid or activation limit reached.' });
+            // This is unlikely if status is 200, but handles explicit 'invalid' flag
+            res.status(403).json({ status: 'inactive', valid: false, message: 'License marked as invalid by Lemon Squeezy.' });
         }
 
     } catch (error) {
-        // LS API error, including activation limit reached (which returns 4xx status)
-        const errorMessage = error.response?.data?.error || error.message;
-        console.error('Validation Error:', errorMessage);
-        res.status(500).json({ status: 'error', message: `Server error or activation failed: ${errorMessage}` });
+        // --- START OF MODIFIED ERROR HANDLING ---
+        // This block catches network errors AND errors from LS (400, 403, 429 status codes)
+        
+        // Check if the error came from an LS response body (e.g., key invalid)
+        let ls_error_message = 'Activation failed due to an unknown issue.';
+        if (error.response?.data?.error) {
+             // For some LS errors, the message is in the top-level 'error' field
+             ls_error_message = error.response.data.error;
+        } else if (error.response?.data?.errors?.[0]?.detail) {
+             // For other LS errors (e.g., 403 Forbidden), it's in the 'errors' array
+             ls_error_message = error.response.data.errors[0].detail;
+        } else if (error.message.includes('403')) {
+             ls_error_message = 'License is invalid or disabled.';
+        }
+        
+        console.error('Validation Error:', ls_error_message);
+        
+        // Return a clean 400/403 response that the Chrome extension can read easily
+        res.status(403).json({ 
+            status: 'failed', 
+            valid: false, 
+            message: `Server error or activation failed: ${ls_error_message}` 
+        });
     }
 });
 
