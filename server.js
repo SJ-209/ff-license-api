@@ -4,6 +4,7 @@ const axios = require('axios');
 const cors = require('cors');
 const crypto = require('crypto'); // Used for Webhook signature verification
 const app = express();
+const { Pool } = require('pg');
 const PORT = process.env.PORT || 10000;
 
 // -----------------------------------------------------
@@ -19,6 +20,56 @@ app.use(cors());
 // b) express.raw() is needed specifically for the Webhook route to get the raw body
 app.use(express.json());
 
+
+// The Internal Database URL will be provided as an Environment Variable
+const dbUrl = process.env.DATABASE_URL; 
+
+if (!dbUrl) {
+    console.error("FATAL ERROR: DATABASE_URL environment variable is not set!");
+    // Exit if the database connection string is missing
+    process.exit(1); 
+}
+
+const pool = new Pool({
+    connectionString: dbUrl,
+    // Add SSL support if connecting from outside Render's internal network (good practice)
+    ssl: {
+        rejectUnauthorized: false 
+    }
+});
+
+const CREATE_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS license_activations (
+        id SERIAL PRIMARY KEY,
+        license_key VARCHAR(255) UNIQUE NOT NULL,
+        extension_instance_id VARCHAR(255) UNIQUE,
+        status VARCHAR(50) DEFAULT 'active' NOT NULL, -- 'active', 'refunded', 'disabled'
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+`;
+
+// Test connection AND Run Schema
+pool.connect()
+    .then(client => {
+        console.log("Postgres connected successfully!");
+        
+        // --- THIS IS THE CRITICAL STEP ---
+        // Run the CREATE TABLE query to ensure the table exists
+        return client.query(CREATE_TABLE_SQL)
+            .then(() => {
+                console.log("Database schema confirmed: license_activations table is ready.");
+                client.release();
+            })
+            .catch(schemaErr => {
+                console.error("Error creating schema:", schemaErr.message);
+                client.release();
+                // Optionally exit the process if the schema is essential
+            });
+    })
+    .catch(err => {
+        console.error("FATAL: Postgres connection error:", err.message);
+        process.exit(1); 
+    });
 
 // -----------------------------------------------------
 // 2. LICENSE VALIDATION ENDPOINT (Called by Chrome Extension)
