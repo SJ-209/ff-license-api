@@ -109,13 +109,19 @@ app.post('/api/validate-license', async (req, res) => {
         // B. 2nd Check: If not found in DB, try to ACTIVATE/VALIDATE with Lemon Squeezy
         console.log("License not found locally. Attempting activation via Lemon Squeezy...");
         
-        const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', {
+        // 1. Prepare the URL-encoded data payload
+        const payload = new URLSearchParams({
             license_key: license_key,
-            instance_name: instance_id 
-        }, {
+            instance_name: instance_id // Lemon Squeezy requires 'instance_name'
+        }).toString();
+
+
+        const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', payload, {
             headers: {
-                'Authorization': `Bearer ${LEMON_SQUEEZY_API_KEY}`, 
-                'Accept': 'application/json',
+                'Authorization': `Bearer ${LEMON_SQUEEZY_API_KEY}`,
+                // 2. CRITICAL CHANGE: Use the required content type
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Accept': 'application/json', // Keep this for the response format
             }
         });
         
