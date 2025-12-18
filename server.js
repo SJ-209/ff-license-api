@@ -120,7 +120,6 @@ app.post('/api/validate-license', async (req, res) => {
         // This line is where the magic happens and must be correct:
         const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', payload, {
             headers: {
-                'Authorization': `Bearer ${LEMON_SQUEEZY_API_KEY}`,
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Accept': 'application/json',
             }
