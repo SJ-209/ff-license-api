@@ -162,7 +162,7 @@ app.post('/api/validate-license', async (req, res) => {
              ls_error_message = 'License is invalid or disabled.';
         }
         
-        console.error('Validation Error:', ls_error_message);
+        console.error('Validation Error (FULL OBJECT):', error);
         
         // Return a clean 400/403 response that the Chrome extension can read easily
         res.status(403).json({ 
@@ -218,8 +218,11 @@ app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), async (re
             console.log(`ACTION: Revoked ${updateResult.rowCount} license activation(s) due to refund.`);
         }
         
-        // Always return 200 OK quickly to acknowledge receipt
-        res.sendStatus(200); 
+        res.status(403).json({ 
+            status: 'failed', 
+            valid: false, 
+            message: `Server error or activation failed: ${ls_error_message}` 
+        });
 
     } catch (dbError) {
         console.error("WEBHOOK DB ERROR:", dbError);
