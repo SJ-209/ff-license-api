@@ -127,9 +127,17 @@ app.post('/api/validate-license', async (req, res) => {
 
         // --- START OF MODIFIED SUCCESS HANDLING ---
         // If we reach here, axios returned a 200 OK status.
-        const data = ls_response.data.data.attributes; // Access the attributes object safely
+        const responseData = ls_response.data;
 
-        if (String(data.product_id) !== String(YOUR_PRODUCT_ID)) {
+        // Check if the response body contains the expected JSON:API structure for success
+        if (!responseData || !responseData.data || !responseData.data.attributes) {
+            // Throw a custom error if the 200 response body is malformed
+            throw new Error("Lemon Squeezy returned 200 OK but with malformed data.");
+        }
+
+        const data = responseData.data.attributes; // Access the attributes object safely
+
+        if (String(data.product_id) !== String(PRODUCT_ID)) {
              return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
         }
 
