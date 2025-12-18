@@ -129,19 +129,22 @@ app.post('/api/validate-license', async (req, res) => {
         // If we reach here, axios returned a 200 OK status.
         const responseData = ls_response.data;
 
-        // Check if the response body contains the expected JSON:API structure for success
-        if (!responseData || !responseData.data || !responseData.data.attributes) {
-            // Throw a custom error if the 200 response body is malformed
-            throw new Error("Lemon Squeezy returned 200 OK but with malformed data.");
+        const license_key_data = responseData.license_key;
+
+        // Check for basic success first
+        if (responseData.activated !== true || !license_key_data) {
+            // This case should ideally not happen after 200 OK, but catches malformed success.
+            throw new Error("Activation failed despite 200 OK status. Key may be invalid or expired.");
         }
 
-        const data = responseData.data.attributes; // Access the attributes object safely
+        const ls_status = license_key_data.status;
+        const ls_product_id = license_key_data.product_id; // Check if your license key object contains product_id
 
-        if (String(data.product_id) !== String(PRODUCT_ID)) {
+        if (String(ls_product_id) !== String(PRODUCT_ID)) {
              return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
         }
 
-        if (data.valid) {
+        if (ls_status === 'active') {
             // Activation was successful.
             
             // C. 3rd Step: Insert the new active license into your DB
@@ -156,8 +159,8 @@ app.post('/api/validate-license', async (req, res) => {
                 message: 'Activation successful.'
             });
         } else {
-            // This is unlikely if status is 200, but handles explicit 'invalid' flag
-            res.status(403).json({ status: 'inactive', valid: false, message: 'License marked as invalid by Lemon Squeezy.' });
+            // License key is valid but status is not 'active' (e.g., 'expired', 'cancelled')
+            res.status(403).json({ status: ls_status, valid: false, message: `License status is ${ls_status}.` });
         }
 
     // server.js - REPLACE THE EXISTING CATCH BLOCK (around line 170)
