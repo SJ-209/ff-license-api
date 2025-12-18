@@ -80,6 +80,7 @@ pool.connect()
 
 app.post('/api/validate-license', async (req, res) => {
     const { license_key, instance_id } = req.body;
+    console.log("DEBUG: Key received from extension:", license_key);
     
     // IMPORTANT SECRETS (from Render Environment Variables)
     const LEMON_SQUEEZY_API_KEY = process.env.LEMON_SQUEEZY_API_KEY;
@@ -111,20 +112,20 @@ app.post('/api/validate-license', async (req, res) => {
         
         // 1. Prepare the URL-encoded data payload
         const payload = new URLSearchParams({
-            license_key: license_key,
-            instance_name: instance_id // Lemon Squeezy requires 'instance_name'
+            // Make absolutely sure you are using the variable from req.body
+            license_key: license_key, 
+            instance_name: instance_id 
         }).toString();
 
-
+        // This line is where the magic happens and must be correct:
         const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', payload, {
             headers: {
                 'Authorization': `Bearer ${LEMON_SQUEEZY_API_KEY}`,
-                // 2. CRITICAL CHANGE: Use the required content type
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json', // Keep this for the response format
+                'Accept': 'application/json',
             }
         });
-        
+
         // --- START OF MODIFIED SUCCESS HANDLING ---
         // If we reach here, axios returned a 200 OK status.
         const data = ls_response.data.data.attributes; // Access the attributes object safely
