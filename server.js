@@ -152,37 +152,45 @@ app.post('/api/validate-license', async (req, res) => {
             res.status(403).json({ status: 'inactive', valid: false, message: 'License marked as invalid by Lemon Squeezy.' });
         }
 
+    // server.js - REPLACE THE EXISTING CATCH BLOCK (around line 170)
+
     } catch (error) {
-        // Axios throws an error if status code is not 2xx.
-        // The error object contains the non-2xx response details.
+        // --- (C) CRITICAL: Robust Error Handling ---
         
         let ls_error_message = 'Activation failed due to an unknown issue.';
-        let http_status = 403; // Default to Forbidden
+        let http_status = 500; 
 
         if (error.response) {
-            // This means we received a response from Lemon Squeezy, but it was an error status (e.g., 403, 422).
+            // Case 1: Axios received a response from LS (e.g., 400, 403, 422)
             const responseData = error.response.data;
             http_status = error.response.status;
 
-            console.error('Lemon Squeezy Error Response Status:', http_status);
+            // These two lines are ESSENTIAL for the next log check:
+            console.error('Lemon Squeezy Error Response Status:', http_status); 
             console.error('Lemon Squeezy Error Response Data:', responseData);
 
-            if (responseData.error) {
-                 // For some LS errors (e.g., 400), the message is in the top-level 'error' field
+            if (responseData && responseData.error) {
+                 // Format 1: Simple error message (e.g., 400 Bad Request)
                  ls_error_message = responseData.error;
-            } else if (responseData.errors && responseData.errors.length > 0) {
-                 // For JSON:API errors (e.g., 422 Unprocessable Entity), it's in the 'errors' array
+            } else if (responseData && responseData.errors && responseData.errors.length > 0) {
+                 // Format 2: JSON:API errors (e.g., 422 Unprocessable Entity)
                  ls_error_message = responseData.errors[0].detail;
             } else {
-                 ls_error_message = `Server returned status ${http_status}. Check Lemon Squeezy API Key or license validity.`;
+                 ls_error_message = `Server returned status ${http_status}. Check license validity.`;
             }
+        } else if (error.request) {
+            // Case 2: The request was made, but no response was received (Timeout, Network Failure)
+            ls_error_message = `No response received from Lemon Squeezy: ${error.message}`;
+            http_status = 504; // Gateway Timeout equivalent
+            console.error('Lemon Squeezy Request Error:', error.request);
         } else {
-            // Network error (e.g., connection refusal, DNS failure)
-            ls_error_message = `Network or connection failure: ${error.message}`;
+            // Case 3: Setup or configuration error (This is where your original TypeError might be coming from)
+            ls_error_message = `Local Error: ${error.message}`;
             http_status = 500;
+            console.error('Local Catch Error (Likely TypeError):', error.message);
         }
 
-        // Return a clean response to the Chrome Extension
+        // Return a clean error response to the Chrome Extension
         res.status(http_status).json({ 
             status: 'failed', 
             valid: false, 
