@@ -84,7 +84,7 @@ app.post('/api/validate-license', async (req, res) => {
     
     // IMPORTANT SECRETS (from Render Environment Variables)
     const LEMON_SQUEEZY_API_KEY = process.env.LEMON_SQUEEZY_API_KEY;
-    const MY_PRODUCT_ID = process.env.PRODUCT_ID; 
+    const PRODUCT_ID = process.env.PRODUCT_ID; 
 
     if (!license_key || !instance_id) {
         return res.status(400).json({ status: 'error', message: 'Key and Instance ID are required.' });
@@ -140,7 +140,7 @@ app.post('/api/validate-license', async (req, res) => {
         const ls_status = license_key_data.status;
         const ls_product_id = license_key_data.product_id; // Check if your license key object contains product_id
 
-        if (String(ls_product_id) !== String(MY_PRODUCT_ID)) {
+        if (String(ls_product_id) !== String(PRODUCT_ID)) {
              return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
         }
 
