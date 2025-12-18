@@ -154,28 +154,40 @@ app.post('/api/validate-license', async (req, res) => {
         }
 
     } catch (error) {
-        // --- START OF MODIFIED ERROR HANDLING ---
-        // This block catches network errors AND errors from LS (400, 403, 429 status codes)
+        // Axios throws an error if status code is not 2xx.
+        // The error object contains the non-2xx response details.
         
-        // Check if the error came from an LS response body (e.g., key invalid)
         let ls_error_message = 'Activation failed due to an unknown issue.';
-        if (error.response?.data?.error) {
-             // For some LS errors, the message is in the top-level 'error' field
-             ls_error_message = error.response.data.error;
-        } else if (error.response?.data?.errors?.[0]?.detail) {
-             // For other LS errors (e.g., 403 Forbidden), it's in the 'errors' array
-             ls_error_message = error.response.data.errors[0].detail;
-        } else if (error.message.includes('403')) {
-             ls_error_message = 'License is invalid or disabled.';
+        let http_status = 403; // Default to Forbidden
+
+        if (error.response) {
+            // This means we received a response from Lemon Squeezy, but it was an error status (e.g., 403, 422).
+            const responseData = error.response.data;
+            http_status = error.response.status;
+
+            console.error('Lemon Squeezy Error Response Status:', http_status);
+            console.error('Lemon Squeezy Error Response Data:', responseData);
+
+            if (responseData.error) {
+                 // For some LS errors (e.g., 400), the message is in the top-level 'error' field
+                 ls_error_message = responseData.error;
+            } else if (responseData.errors && responseData.errors.length > 0) {
+                 // For JSON:API errors (e.g., 422 Unprocessable Entity), it's in the 'errors' array
+                 ls_error_message = responseData.errors[0].detail;
+            } else {
+                 ls_error_message = `Server returned status ${http_status}. Check Lemon Squeezy API Key or license validity.`;
+            }
+        } else {
+            // Network error (e.g., connection refusal, DNS failure)
+            ls_error_message = `Network or connection failure: ${error.message}`;
+            http_status = 500;
         }
-        
-        console.error('Validation Error (FULL OBJECT):', error);
-        
-        // Return a clean 400/403 response that the Chrome extension can read easily
-        res.status(403).json({ 
+
+        // Return a clean response to the Chrome Extension
+        res.status(http_status).json({ 
             status: 'failed', 
             valid: false, 
-            message: `Server error or activation failed: ${ls_error_message}` 
+            message: `License check failed: ${ls_error_message}` 
         });
     }
 });
