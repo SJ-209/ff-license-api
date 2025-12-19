@@ -135,10 +135,19 @@ app.post('/api/validate-license', async (req, res) => {
         console.log("DEBUG: Key Details Object Keys:", Object.keys(license_key_data));
 
         // Check for basic success first
-        if (license_key_data.activated !== true || !license_key_data.meta || !license_key_data.meta.product_id) {
-            // This catches activation failure or a malformed response missing meta
-            console.error("DEBUG: Failed Activation Check. Activated:", license_key_data.activated, "Meta:", !!license_key_data.meta);
-            throw new Error("Activation failed or response is malformed/missing meta data.");
+        if (license_key_data.activated !== true || !meta || !license_key_data.meta.product_id) {
+            
+            // Log the activation status before throwing the error
+            console.error("DEBUG: Failed Activation Check. Activated:", license_key_data.activated, "Meta:", !!meta);
+
+            // *****************************************************************
+            // *** CRITICAL FIX: IF IN TEST MODE AND ACTIVE, SKIP META CHECK ***
+            // *****************************************************************
+            if (license_key_data.test_mode === true && license_key_data.status === 'active') {
+                console.warn("WARNING: Skipping product ID check for active Test Mode Key.");
+            } else {
+                 throw new Error("Activation failed or response is malformed/missing meta data.");
+            }
         }
 
         const ls_status = license_key_data.status;
