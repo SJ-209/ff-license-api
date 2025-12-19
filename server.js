@@ -129,20 +129,22 @@ app.post('/api/validate-license', async (req, res) => {
         // If we reach here, axios returned a 200 OK status.
         const responseData = ls_response.data;
 
-        const license_key_data = responseData.license_key;
+        const license_key_data = responseData.license_key || responseData;
+        const meta = license_key_data.meta;
 
         // Check for basic success first
-        if (responseData.activated !== true || !license_key_data) {
-            // This case should ideally not happen after 200 OK, but catches malformed success.
-            throw new Error("Activation failed despite 200 OK status. Key may be invalid or expired.");
+        if (responseData.activated !== true || !meta) {
+            // This catches activation failure or a malformed response missing meta
+            throw new Error("Activation failed or response is malformed/missing meta data.");
         }
 
         const ls_status = license_key_data.status;
         const ls_product_id = license_key_data.meta?.product_id; // Check if your license key object contains product_id
 
         if (!ls_product_id) {
-             console.error("CRITICAL: License key API response is missing product_id in the meta field.");
-             return res.status(403).json({ status: 'error', message: 'License key is missing product ID data.' });
+             console.error("CRITICAL: License key API response is missing product_id, even though meta was present.");
+             // This indicates an unexpected structure.
+             return res.status(403).json({ status: 'error', message: 'License key is missing critical product ID data.' });
         }
 
         console.log(`DEBUG: Comparing Env ID (${PRODUCT_ID}) against Key ID (${ls_product_id})`);
