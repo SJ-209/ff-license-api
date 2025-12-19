@@ -132,9 +132,12 @@ app.post('/api/validate-license', async (req, res) => {
         const license_key_data = responseData.license_key || responseData;
         const meta = license_key_data.meta;
 
+        console.log("DEBUG: Key Details Object Keys:", Object.keys(license_key_data));
+
         // Check for basic success first
-        if (responseData.activated !== true || !meta) {
+        if (license_key_data.activated !== true || !license_key_data.meta || !license_key_data.meta.product_id) {
             // This catches activation failure or a malformed response missing meta
+            console.error("DEBUG: Failed Activation Check. Activated:", license_key_data.activated, "Meta:", !!license_key_data.meta);
             throw new Error("Activation failed or response is malformed/missing meta data.");
         }
 
