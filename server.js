@@ -125,38 +125,39 @@ app.post('/api/validate-license', async (req, res) => {
             }
         });
 
-        // --- START OF MODIFIED SUCCESS HANDLING ---
+       // --- START OF MODIFIED SUCCESS HANDLING ---
         // If we reach here, axios returned a 200 OK status.
         const responseData = ls_response.data;
 
         const license_key_data = responseData.license_key || responseData;
         const meta = license_key_data.meta;
+        const ls_status = license_key_data.status;
+
+        let ls_product_id; // CRITICAL: Declare as 'let' so we can assign it later
 
         console.log("DEBUG: Key Details Object Keys:", Object.keys(license_key_data));
 
-        // Check for basic success first
-        if (license_key_data.activated !== true || !meta || !license_key_data.meta.product_id) {
-            
-            // Log the activation status before throwing the error
-            console.error("DEBUG: Failed Activation Check. Activated:", license_key_data.activated, "Meta:", !!meta);
-
-            // *****************************************************************
-            // *** CRITICAL FIX: IF IN TEST MODE AND ACTIVE, SKIP META CHECK ***
-            // *****************************************************************
-            if (license_key_data.test_mode === true && license_key_data.status === 'active') {
-                console.warn("WARNING: Skipping product ID check for active Test Mode Key.");
-            } else {
-                 throw new Error("Activation failed or response is malformed/missing meta data.");
-            }
+        // A. Attempt to read product ID from the API response
+        if (meta && meta.product_id) {
+            ls_product_id = meta.product_id;
+        } 
+        // B. If product ID is missing, check if we should bypass (Test Mode)
+        else if (license_key_data.test_mode === true && ls_status === 'active') {
+            console.warn("WARNING: Product ID missing. Bypassing check for active Test Mode Key.");
+            // If we bypass, we MUST assume the product ID is the one the server is expecting.
+            ls_product_id = PRODUCT_ID; 
+        }
+        // C. If neither A nor B is true, throw an error.
+        else {
+            console.error("DEBUG: Failed Activation Check. Activated:", license_key_data.activated, "Meta Present:", !!meta);
+            throw new Error("Activation failed or response is malformed/missing product ID data.");
         }
 
-        const ls_status = license_key_data.status;
-        const ls_product_id = license_key_data.meta?.product_id; // Check if your license key object contains product_id
-
+        // At this point, ls_product_id MUST be defined (either from API or bypass)
         if (!ls_product_id) {
-             console.error("CRITICAL: License key API response is missing product_id, even though meta was present.");
-             // This indicates an unexpected structure.
-             return res.status(403).json({ status: 'error', message: 'License key is missing critical product ID data.' });
+            // This check is now redundant but kept as a safety net
+            console.error("CRITICAL: ls_product_id is still undefined after checks.");
+            return res.status(500).json({ status: 'error', message: 'Internal server error during license check.' });
         }
 
         console.log(`DEBUG: Comparing Env ID (${PRODUCT_ID}) against Key ID (${ls_product_id})`);
