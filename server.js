@@ -47,14 +47,14 @@ pool.connect()
 // --- 3. LICENSE VALIDATION ENDPOINT ---
 app.post('/api/validate-license', async (req, res) => {
     const { license_key, instance_id } = req.body;
-    const PRODUCT_ID = process.env.PRODUCT_ID; 
+    const PRODUCT_ID = process.env.PRODUCT_ID; // Your live Product ID (e.g., 647685)
 
     if (!license_key || !instance_id) {
         return res.status(400).json({ status: 'error', message: 'Key and Instance ID are required.' });
     }
 
     try {
-        // A. Local Cache Check
+        // 1. FAST CHECK: Look in your local Postgres DB first
         const dbResult = await pool.query(
             'SELECT status FROM license_activations WHERE license_key = $1 AND extension_instance_id = $2',
             [license_key, instance_id]
@@ -62,44 +62,63 @@ app.post('/api/validate-license', async (req, res) => {
 
         if (dbResult.rows.length > 0) {
             const status = dbResult.rows[0].status;
-            if (status === 'active') return res.status(200).json({ status: 'active', valid: true });
-            return res.status(403).json({ status, valid: false, message: `License is ${status}` });
+            if (status === 'active') {
+                return res.status(200).json({ status: 'active', valid: true });
+            } else {
+                return res.status(403).json({ status: status, valid: false, message: `License ${status}.` });
+            }
         }
         
-        // B. Lemon Squeezy Activation
-        const payload = new URLSearchParams({ license_key, instance_name: instance_id }).toString();
+        // 2. REMOTE CHECK: Call Lemon Squeezy to Activate
+        const payload = new URLSearchParams({
+            license_key: license_key, 
+            instance_name: instance_id 
+        }).toString();
+
         const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', payload, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Accept': 'application/json',
+            }
         });
 
         const responseData = ls_response.data;
+
+        // --- UNIVERSAL DATA EXTRACTION ---
+        // This handles differences between Test Mode and Live keys
         const license_key_data = responseData.license_key || responseData;
         const meta = responseData.meta || license_key_data.meta;
         const ls_status = license_key_data.status;
 
         let ls_product_id;
+
         if (meta && meta.product_id) {
             ls_product_id = meta.product_id;
-        } else if (license_key_data.test_mode === true && ls_status === 'active') {
+        } 
+        else if (license_key_data.test_mode === true && ls_status === 'active') {
+            // Bypass product check for Test Mode keys
             ls_product_id = PRODUCT_ID; 
-        } else {
-            throw new Error("Missing product ID in response.");
+        }
+        else {
+            throw new Error("Activation failed: Missing product ID data.");
         }
 
-        // Verify Product ID matches your Render Env Var
+        // 3. VALIDATION: Does the product ID match your extension?
         if (String(ls_product_id) !== String(PRODUCT_ID)) { 
-            return res.status(403).json({ status: 'error', message: 'Product ID Mismatch' });
+            return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
         }
 
+        // 4. FINALIZATION: If active, save to your DB and unlock the extension
         if (ls_status === 'active') {
             await pool.query(
                 'INSERT INTO license_activations (license_key, extension_instance_id, status) VALUES ($1, $2, $3) ON CONFLICT (extension_instance_id) DO UPDATE SET status = $3',
                 [license_key, instance_id, 'active']
             );
-            return res.status(200).json({ status: 'active', valid: true });
-        }
 
-        res.status(403).json({ status: ls_status, valid: false });
+            return res.status(200).json({ status: 'active', valid: true });
+        } else {
+            return res.status(403).json({ status: ls_status, valid: false });
+        }
 
     } catch (error) {
         console.error('Validation Error:', error.message);
