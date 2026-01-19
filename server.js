@@ -119,20 +119,48 @@ app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), async (re
     try {
         const event = JSON.parse(req.body.toString());
         const eventName = event.meta.event_name;
-        const licenseKey = event.data.attributes.license_key; 
+        const attributes = event.data.attributes;
 
-        if (eventName === 'order_refunded' || eventName === 'license_disabled') {
-            await pool.query('UPDATE license_activations SET status = $1 WHERE license_key = $2', ['refunded', licenseKey]);
-            console.log(`License ${licenseKey} revoked.`);
+        let licenseKey = null;
+        let shouldRevoke = false;
+
+        // 1. Handle Manual Disabling or Expiration
+        if (eventName === 'license_key_updated') {
+            // In this event, the attribute is called 'key'
+            licenseKey = attributes.key; 
+            const status = attributes.status; // 'active', 'inactive', 'expired', 'disabled'
+            
+            if (status === 'disabled' || status === 'expired') {
+                shouldRevoke = true;
+                console.log(`[WEBHOOK] License ${licenseKey} status changed to: ${status}`);
+            }
         }
-        
-        // IMPORTANT: Always return 200 to Lemon Squeezy if signature is valid
+
+        // 2. Handle Refunds
+        if (eventName === 'order_refunded') {
+            // NOTE: Order objects don't always include the license key string directly.
+            // It's safer to Revoke by looking up the order_id if you store it.
+            // However, if you only have the key, Lemon Squeezy usually triggers 
+            // a 'license_key_updated' event automatically when an order is refunded.
+            console.log(`[WEBHOOK] Order ${event.data.id} was refunded.`);
+        }
+
+        // 3. Update Database if revocation is needed
+        if (shouldRevoke && licenseKey) {
+            const updateResult = await pool.query(
+                'UPDATE license_activations SET status = $1 WHERE license_key = $2',
+                ['disabled', licenseKey]
+            );
+            console.log(`ACTION: Revoked ${updateResult.rowCount} activation(s) for key: ${licenseKey}`);
+        }
+
+        // Always return 200
         res.status(200).send("Webhook Processed");
 
-    } catch (dbError) {
-        console.error("WEBHOOK ERROR:", dbError.message);
-        res.status(200).send("Error but received"); 
-    }
+        } catch (err) {
+                console.error("WEBHOOK ERROR:", err.message);
+                res.status(200).send("Error logged"); 
+            }
 });
 
 app.listen(PORT, () => console.log(`Server live on port ${PORT}`));
