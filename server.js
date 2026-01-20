@@ -70,9 +70,14 @@ app.post('/api/validate-license', async (req, res) => {
         }
         
         // 2. REMOTE CHECK: Call Lemon Squeezy to Activate
+        // const payload = new URLSearchParams({
+        //     license_key: license_key, 
+        //     instance_name: instance_id 
+        // }).toString();
+
         const payload = new URLSearchParams({
-            license_key: license_key, 
-            instance_name: instance_id 
+            license_key: license_key.trim(), 
+            instance_name: instance_id.trim() 
         }).toString();
 
         const ls_response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', payload, {
