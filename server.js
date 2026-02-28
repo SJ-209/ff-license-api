@@ -155,15 +155,30 @@ app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), async (re
         let licenseKey = null;
         let shouldRevoke = false;
 
-        // 1. Handle Manual Disabling or Expiration
+        // 1. Handle manual status changes (activate, disable, expire)
         if (eventName === 'license_key_updated') {
             // In this event, the attribute is called 'key'
-            licenseKey = attributes.key; 
+            licenseKey = attributes.key;
             const status = attributes.status; // 'active', 'inactive', 'expired', 'disabled'
-            
+
+            console.log(`[WEBHOOK] license_key_updated received for ${licenseKey}: ${status}`);
+
             if (status === 'disabled' || status === 'expired') {
                 shouldRevoke = true;
-                console.log(`[WEBHOOK] License ${licenseKey} status changed to: ${status}`);
+                console.log(`[WEBHOOK] will revoke key ${licenseKey} due to ${status}`);
+            } else if (status === 'active') {
+                // If the key becomes active again (for example after a refund is reversed
+                // or the key is first generated in Test Mode), ensure our database is up
+                // to date so clients don't have to refresh manually.
+                console.log(`[WEBHOOK] ensuring key ${licenseKey} is marked active in DB`);
+                try {
+                    await pool.query(
+                        'UPDATE license_activations SET status = $1 WHERE license_key = $2',
+                        ['active', licenseKey]
+                    );
+                } catch (dbErr) {
+                    console.error('[WEBHOOK] DB update failed for activation:', dbErr.message);
+                }
             }
         }
 
