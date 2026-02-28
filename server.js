@@ -99,18 +99,25 @@ app.post('/api/validate-license', async (req, res) => {
 
         if (meta && meta.product_id) {
             ls_product_id = meta.product_id;
-        } 
-        else if (license_key_data.test_mode === true && ls_status === 'active') {
-            // Bypass product check for Test Mode keys
-            ls_product_id = PRODUCT_ID; 
-        }
-        else {
+        } else if (license_key_data.test_mode === true) {
+            // Test mode keys often don't include a product_id; just use the value
+            // configured in your environment and skip the strict comparison below.
+            console.warn('[LICENSE] test_mode detected, skipping product_id check');
+            ls_product_id = PRODUCT_ID;
+        } else {
             throw new Error("Activation failed: Missing product ID data.");
         }
 
         // 3. VALIDATION: Does the product ID match your extension?
-        if (String(ls_product_id) !== String(PRODUCT_ID)) { 
-            return res.status(403).json({ status: 'error', message: 'Invalid product for this key.' });
+        // Only enforce the check for non-test licenses so that you can freely
+        // spin up test keys without needing to track the internal id.
+        if (!license_key_data.test_mode && String(ls_product_id) !== String(PRODUCT_ID)) {
+            console.error('[LICENSE] product mismatch', { ls_product_id, expected: PRODUCT_ID });
+            return res.status(403).json({
+                status: 'error',
+                message: 'Invalid product for this key.',
+                details: { ls_product_id, expected_product_id: PRODUCT_ID }
+            });
         }
 
         // 4. FINALIZATION: If active, save to your DB and unlock the extension
