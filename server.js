@@ -10,6 +10,81 @@ const PORT = process.env.PORT || 10000;
 
 // --- 1. MIDDLEWARE ---
 app.use(cors());
+
+// Webhook MUST be registered before express.json() so it receives raw body for HMAC verification
+// Match both /api/ls-webhook and /api/ls-webhook/ to avoid 404 from trailing-slash mismatches
+const webhookHandler = express.raw({ type: 'application/json' });
+app.post(['/api/ls-webhook', '/api/ls-webhook/'], webhookHandler, async (req, res) => {
+    const secret = process.env.LS_WEBHOOK_SECRET;
+    if (!secret) {
+        console.error('[WEBHOOK] LS_WEBHOOK_SECRET not set');
+        return res.status(500).send("Webhook not configured");
+    }
+    const signature = (req.headers['x-signature'] || '').trim();
+    if (!signature) return res.status(400).send("Missing X-Signature");
+
+    const hmac = crypto.createHmac('sha256', secret);
+    const digest = Buffer.from(hmac.update(req.body).digest('hex'), 'utf8');
+    const sigBuffer = Buffer.from(signature, 'utf8');
+
+    if (digest.length !== sigBuffer.length || !crypto.timingSafeEqual(digest, sigBuffer)) {
+        return res.status(400).send("Invalid Signature");
+    }
+
+    try {
+        const event = JSON.parse(req.body.toString());
+        const eventName = event.meta?.event_name;
+
+        console.log(`[WEBHOOK] Received: ${eventName}`);
+
+        let licenseKey = null;
+        let shouldRevoke = false;
+        const attributes = event.data?.attributes || {};
+
+        // 1. Handle manual status changes (activate, disable, expire)
+        if (eventName === 'license_key_updated') {
+            licenseKey = attributes.key;
+            const status = attributes.status;
+
+            console.log(`[WEBHOOK] license_key_updated for ${licenseKey}: ${status}`);
+
+            if (status === 'disabled' || status === 'expired') {
+                shouldRevoke = true;
+                console.log(`[WEBHOOK] will revoke key ${licenseKey} due to ${status}`);
+            } else if (status === 'active') {
+                console.log(`[WEBHOOK] ensuring key ${licenseKey} is marked active in DB`);
+                try {
+                    await pool.query(
+                        'UPDATE license_activations SET status = $1 WHERE license_key = $2',
+                        ['active', licenseKey]
+                    );
+                } catch (dbErr) {
+                    console.error('[WEBHOOK] DB update failed for activation:', dbErr.message);
+                }
+            }
+        }
+
+        // 2. Handle Refunds
+        if (eventName === 'order_refunded') {
+            console.log(`[WEBHOOK] Order ${event.data?.id} was refunded.`);
+        }
+
+        // 3. Update Database if revocation is needed
+        if (shouldRevoke && licenseKey) {
+            const updateResult = await pool.query(
+                'UPDATE license_activations SET status = $1 WHERE license_key = $2',
+                ['disabled', licenseKey]
+            );
+            console.log(`ACTION: Revoked ${updateResult.rowCount} activation(s) for key: ${licenseKey}`);
+        }
+
+        res.status(200).send("Webhook Processed");
+    } catch (err) {
+        console.error("[WEBHOOK ERROR]:", err.message);
+        res.status(200).send("Error logged");
+    }
+});
+
 app.use(express.json());
 
 // --- 2. DATABASE SETUP ---
@@ -138,75 +213,10 @@ app.post('/api/validate-license', async (req, res) => {
     }
 });
 
-// --- 4. WEBHOOK HANDLER ---
-app.post('/api/ls-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    const secret = process.env.LS_WEBHOOK_SECRET;
-    const hmac = crypto.createHmac('sha256', secret);
-    const digest = Buffer.from(hmac.update(req.body).digest('hex'), 'utf8');
-    const signature = Buffer.from(req.headers['x-signature'] || '', 'utf8');
+// Health check (helps verify server is reachable when debugging webhook 404s)
+app.get('/api/health', (req, res) => res.status(200).json({ ok: true }));
 
-    if (!crypto.timingSafeEqual(digest, signature)) return res.status(400).send("Invalid Signature");
-    
-    try {
-        const event = JSON.parse(req.body.toString());
-        const eventName = event.meta.event_name;
-        const attributes = event.data.attributes;
-
-        let licenseKey = null;
-        let shouldRevoke = false;
-
-        // 1. Handle manual status changes (activate, disable, expire)
-        if (eventName === 'license_key_updated') {
-            // In this event, the attribute is called 'key'
-            licenseKey = attributes.key;
-            const status = attributes.status; // 'active', 'inactive', 'expired', 'disabled'
-
-            console.log(`[WEBHOOK] license_key_updated received for ${licenseKey}: ${status}`);
-
-            if (status === 'disabled' || status === 'expired') {
-                shouldRevoke = true;
-                console.log(`[WEBHOOK] will revoke key ${licenseKey} due to ${status}`);
-            } else if (status === 'active') {
-                // If the key becomes active again (for example after a refund is reversed
-                // or the key is first generated in Test Mode), ensure our database is up
-                // to date so clients don't have to refresh manually.
-                console.log(`[WEBHOOK] ensuring key ${licenseKey} is marked active in DB`);
-                try {
-                    await pool.query(
-                        'UPDATE license_activations SET status = $1 WHERE license_key = $2',
-                        ['active', licenseKey]
-                    );
-                } catch (dbErr) {
-                    console.error('[WEBHOOK] DB update failed for activation:', dbErr.message);
-                }
-            }
-        }
-
-        // 2. Handle Refunds
-        if (eventName === 'order_refunded') {
-            // NOTE: Order objects don't always include the license key string directly.
-            // It's safer to Revoke by looking up the order_id if you store it.
-            // However, if you only have the key, Lemon Squeezy usually triggers 
-            // a 'license_key_updated' event automatically when an order is refunded.
-            console.log(`[WEBHOOK] Order ${event.data.id} was refunded.`);
-        }
-
-        // 3. Update Database if revocation is needed
-        if (shouldRevoke && licenseKey) {
-            const updateResult = await pool.query(
-                'UPDATE license_activations SET status = $1 WHERE license_key = $2',
-                ['disabled', licenseKey]
-            );
-            console.log(`ACTION: Revoked ${updateResult.rowCount} activation(s) for key: ${licenseKey}`);
-        }
-
-        // Always return 200
-        res.status(200).send("Webhook Processed");
-
-        } catch (err) {
-                console.error("WEBHOOK ERROR:", err.message);
-                res.status(200).send("Error logged"); 
-            }
+app.listen(PORT, () => {
+    console.log(`Server live on port ${PORT}`);
+    console.log('Webhook URL: POST /api/ls-webhook');
 });
-
-app.listen(PORT, () => console.log(`Server live on port ${PORT}`));
